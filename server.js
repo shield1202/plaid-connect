@@ -2,15 +2,32 @@ import express from "express";
 import { Configuration, PlaidApi, PlaidEnvironments } from "plaid";
 
 const app = express();
+const PORT = process.env.PORT || 10000;
 
 /**
- * Plaid configuration
- * IMPORTANT:
- * - If your keys are SANDBOX keys → use PlaidEnvironments.sandbox
- * - If your keys are PRODUCTION keys → use PlaidEnvironments.production
+ * =========================
+ * ENVIRONMENT CHECK
+ * =========================
+ */
+const PLAID_ENV = process.env.PLAID_ENV || "sandbox"; // sandbox or production
+const PRODUCT_LIST = ["assets"]; // bank statements only
+
+const plaidEnvMap = {
+  sandbox: PlaidEnvironments.sandbox,
+  production: PlaidEnvironments.production,
+};
+
+if (!plaidEnvMap[PLAID_ENV]) {
+  throw new Error(`Invalid PLAID_ENV: ${PLAID_ENV}`);
+}
+
+/**
+ * =========================
+ * PLAID CONFIG
+ * =========================
  */
 const config = new Configuration({
-  basePath: PlaidEnvironments.sandbox,
+  basePath: plaidEnvMap[PLAID_ENV],
   baseOptions: {
     headers: {
       "PLAID-CLIENT-ID": process.env.PLAID_CLIENT_ID,
@@ -22,15 +39,28 @@ const config = new Configuration({
 const plaid = new PlaidApi(config);
 
 /**
- * Health check (optional but helpful)
+ * =========================
+ * HEALTH CHECK
+ * =========================
  */
 app.get("/", (req, res) => {
   res.send("Plaid Connect server running");
 });
 
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    plaid_env: PLAID_ENV,
+    products: PRODUCT_LIST,
+    has_PLAID_CLIENT_ID: !!process.env.PLAID_CLIENT_ID,
+    has_PLAID_SECRET: !!process.env.PLAID_SECRET,
+  });
+});
+
 /**
- * Permanent Hosted Link endpoint
- * Visiting /connect will redirect to Plaid Hosted Link
+ * =========================
+ * CONNECT → PLAID HOSTED LINK
+ * =========================
  */
 app.get("/connect", async (req, res) => {
   try {
@@ -38,24 +68,37 @@ app.get("/connect", async (req, res) => {
       client_name: "Shield Funding",
       language: "en",
       country_codes: ["US"],
-      products: ["assets"],
+      products: PRODUCT_LIST,
       user: {
         client_user_id: `sf_${Date.now()}`,
       },
-      hosted_link: {},
+      hosted_link: {
+        delivery_method: "redirect",
+      },
     });
 
     res.redirect(response.data.hosted_link_url);
   } catch (err) {
-    console.error(err?.response?.data || err);
-    res.status(500).send("Plaid link error");
+    console.error("❌ PLAID ERROR");
+
+    if (err.response) {
+      console.error("❌ STATUS:", err.response.status);
+      console.error("❌ DATA:", err.response.data);
+      res.status(500).json(err.response.data);
+    } else {
+      console.error(err);
+      res.status(500).send("Plaid internal error");
+    }
   }
 });
 
 /**
- * Start server
+ * =========================
+ * START SERVER
+ * =========================
  */
-const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`✅ Env: ${PLAID_ENV}`);
+  console.log(`✅ Products: ${PRODUCT_LIST.join(", ")}`);
 });
